@@ -1,42 +1,111 @@
 package main
 
 import (
- "log"
- "os"
- "strings"
+	"fmt"
+	"log"
+	"os"
+	"strconv"
+	"strings"
 
- tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
 func main() {
- // Чтение токена из файла
- tokenBytes, err := os.ReadFile("token.txt")
- if err != nil {
-  log.Fatalf("Ошибка при чтении token.txt: %v", err)
- }
- botToken := strings.TrimSpace(string(tokenBytes))
+	// Чтение токена из файла
+	token, err := os.ReadFile("token.txt")
+	if err != nil {
+		log.Fatalf("Ошибка чтения token.txt: %v", err)
+	}
+	tokenStr := strings.TrimSpace(string(token))
 
- // Инициализация бота
- bot, err := tgbotapi.NewBotAPI(botToken)
- if err != nil {
-  log.Panic(err)
- }
+	// Создание бота
+	bot, err := tgbotapi.NewBotAPI(tokenStr)
+	if err != nil {
+		log.Panic(err)
+	}
 
- log.Printf("Бот авторизован как %s", bot.Self.UserName)
+	bot.Debug = true
+	log.Printf("Авторизован как %s", bot.Self.UserName)
 
- // Настройка получения обновлений
- u := tgbotapi.NewUpdate(0)
- u.Timeout = 60
- updates := bot.GetUpdatesChan(u)
+	// Словарь для хранения TODO-листов пользователей
+	todoLists := make(map[int64][]string)
 
- // Обработка сообщений
- for update := range updates {
-  if update.Message == nil {
-   continue
-  }
+	// Настройка получения обновлений
+	u := tgbotapi.NewUpdate(0)
+	u.Timeout = 60
 
-  msg := tgbotapi.NewMessage(update.Message.Chat.ID, update.Message.Text)
-  bot.Send(msg)
- }
+	updates := bot.GetUpdatesChan(u)
+
+	// Обработка обновлений
+	for update := range updates {
+		if update.Message == nil {
+			continue
+		}
+
+		chatID := update.Message.Chat.ID
+		text := update.Message.Text
+		log.Printf("[%d] %s", chatID, text)
+
+		// Обработка команд
+		if strings.HasPrefix(text, "/") {
+			command := strings.TrimPrefix(text, "/")
+			parts := strings.SplitN(command, " ", 2)
+			cmd := parts[0]
+			arg := ""
+			if len(parts) > 1 {
+				arg = parts[1]
+			}
+
+			switch cmd {
+			case "add":
+				if arg == "" {
+					bot.Send(tgbotapi.NewMessage(chatID, "Используйте: /add <задача>"))
+				} else {
+					todoLists[chatID] = append(todoLists[chatID], arg)
+					bot.Send(tgbotapi.NewMessage(chatID, "Задача добавлена!"))
+				}
+			case "list":
+				tasks := todoLists[chatID]
+				if len(tasks) == 0 {
+					bot.Send(tgbotapi.NewMessage(chatID, "Ваш TODO-лист пуст."))
+				} else {
+					var msg string
+					for i, task := range tasks {
+						msg += fmt.Sprintf("%d. %s\n", i+1, task)
+					}
+					bot.Send(tgbotapi.NewMessage(chatID, msg))
+				}
+			case "done":
+				tasks := todoLists[chatID]
+				if len(tasks) == 0 {
+					bot.Send(tgbotapi.NewMessage(chatID, "Список задач пуст."))
+					break
+				}
+
+				if arg == "" {
+					bot.Send(tgbotapi.NewMessage(chatID, "Используйте: /done <номер>"))
+					break
+				}
+
+				index, err := strconv.Atoi(arg)
+				if err != nil || index < 1 || index > len(tasks) {
+					bot.Send(tgbotapi.NewMessage(chatID, "Неверный номер задачи."))
+				} else {
+					todoLists[chatID] = append(tasks[:index-1], tasks[index:]...)
+					bot.Send(tgbotapi.NewMessage(chatID, "Задача выполнена!"))
+				}
+			case "help":
+				helpText := "Доступные команды:\n" +
+					"/add <задача> - добавить задачу\n" +
+					"/list - показать список задач\n" +
+					"/done <номер> - удалить задачу по номеру\n" +
+					"/help - показать это сообщение"
+				bot.Send(tgbotapi.NewMessage(chatID, helpText))
+			default:
+				bot.Send(tgbotapi.NewMessage(chatID, "Неизвестная команда. Используйте /help для справки."))
+			}
+		} else {
+			bot.Send(tgbotapi.NewMessage(chatID, "Пожалуйста, используйте команды. Например, /help"))
+		}
+	}
 }
-
